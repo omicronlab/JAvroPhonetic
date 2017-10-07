@@ -19,7 +19,7 @@
     Copyright (C) OmicronLab (http://www.omicronlab.com). All Rights Reserved.
 
 
-    Contributor(s): ______________________________________.
+    Contributor(s): Mohsin Uddin <mohudd55@gmail.com>
 
     *****************************************************************************
     =============================================================================
@@ -33,38 +33,44 @@ import java.util.List;
 
 import com.omicronlab.avro.exception.NoPhoneticLoaderException;
 import com.omicronlab.avro.phonetic.*;
+import java.util.HashMap;
 
 public class PhoneticParser {
 
     private static volatile PhoneticParser instance = null;
     private static PhoneticLoader loader = null;
     private static List<Pattern> patterns;
+    private static HashMap<String, Pattern> patternMap;
     private static String vowel = "";
     private static String consonant = "";
     private static String casesensitive = "";
     private boolean initialized = false;
     private static int maxPatternLength = 0;
-
+    
     // Prevent initialization
-    private PhoneticParser() {
-        patterns = new ArrayList<Pattern>();
+    private PhoneticParser(){
+        patterns = new ArrayList<>();
+        patternMap = new HashMap<>();
     }
 
+    @Override
     public Object clone() throws CloneNotSupportedException {
         throw new CloneNotSupportedException();
     }
 
     public static PhoneticParser getInstance() {
-        if(instance == null) {
+        PhoneticParser phoneticParser = PhoneticParser.instance;
+        if(phoneticParser == null) {
             synchronized (PhoneticParser.class) {
-                if(instance == null) {
-                    instance = new PhoneticParser();
+                phoneticParser = PhoneticParser.instance;
+                if(phoneticParser == null) {
+                    PhoneticParser.instance = phoneticParser = new PhoneticParser();
                 }
             }
         }
-        return instance;
+        return phoneticParser;
     }
-
+    
     public synchronized void setLoader(PhoneticLoader loader) {
         PhoneticParser.loader = loader;
     }
@@ -76,16 +82,17 @@ public class PhoneticParser {
         Data data = loader.getData();
         patterns = data.getPatterns();
         Collections.sort(patterns);
-
+        for(Pattern pattern: patterns) {
+            patternMap.put(pattern.getFind(), pattern);
+        }
         vowel = data.getVowel();
         consonant = data.getConsonant();
         casesensitive = data.getCasesensitive();
         maxPatternLength = patterns.get(0).getFind().length();
         initialized = true;
     }
-
+    
     public String parse(String input) {
-
         if(initialized == false) {
             try {
                 this.init();
@@ -95,146 +102,133 @@ public class PhoneticParser {
                 System.exit(0);
             }
         }
-
-        String fixed = "";
+        
+        String text = "";
         for(char c: input.toCharArray()) {
             if(this.isCaseSensitive(c)) {
-                fixed += c;
+                text += c;
             }
             else {
-                fixed += Character.toLowerCase(c);
+                text += Character.toLowerCase(c);
             }
         }
 
         String output = "";
-        for(int cur = 0; cur < fixed.length(); ++cur) {
+        for(int cur = 0; cur < text.length(); ++cur) {
             int start = cur, end;
 
             boolean matched = false;
             int len;
             for(len = maxPatternLength; len > 0; --len) {
                 end = start + len;
-                if(end <= fixed.length()) {
-                    String chunk = fixed.substring(start, end);
-
-                    // Binary Search
-                    int left = 0, right = patterns.size() - 1, mid;
-                    while(right >= left) {
-                        mid = (right + left) / 2;
-                        Pattern pattern = patterns.get(mid);
-                        if(pattern.getFind().equals(chunk)) {
-                            for(Rule rule: pattern.getRules()) {
-                                boolean replace = true;
-
-                                int chk = 0;
-
-                                for(Match match: rule.getMatches()) {
-                                    if(match.getType().equals("suffix")) {
-                                        chk = end;
-                                    }
-                                    // Prefix
-                                    else {
-                                        chk = start - 1;
-                                    }
-
-                                    // Beginning
-                                    if(match.getScope().equals("punctuation")) {
-                                        if(
-                                            ! (
-                                                (chk < 0 && match.getType().equals("prefix")) ||
-                                                (chk >= fixed.length() && match.getType().equals("suffix")) ||
-                                                this.isPunctuation(fixed.charAt(chk))
-                                            ) ^ match.isNegative()
-                                        ) {
-                                            replace = false;
-                                            break;
-                                        }
-                                    }
-                                    // Vowel
-                                    else if(match.getScope().equals("vowel")) {
-                                        if(
-                                            ! (
-                                                (
-                                                    (chk >= 0 && match.getType().equals("prefix")) ||
-                                                    (chk < fixed.length() && match.getType().equals("suffix"))
-                                                ) &&
-                                                this.isVowel(fixed.charAt(chk))
-                                            ) ^ match.isNegative()
-                                        ) {
-                                            replace = false;
-                                            break;
-                                        }
-                                    }
-                                    // Consonant
-                                    else if(match.getScope().equals("consonant")) {
-                                        if(
-                                            ! (
-                                                (
-                                                    (chk >= 0 && match.getType().equals("prefix")) ||
-                                                    (chk < fixed.length() && match.getType().equals("suffix"))
-                                                ) &&
-                                                this.isConsonant(fixed.charAt(chk))
-                                            ) ^ match.isNegative()
-                                        ) {
-                                            replace = false;
-                                            break;
-                                        }
-                                    }
-                                    // Exact
-                                    else if(match.getScope().equals("exact")) {
-                                        int s, e;
-                                        if(match.getType().equals("suffix")) {
-                                            s = end;
-                                            e = end + match.getValue().length();
-                                        }
-                                        // Prefix
-                                        else {
-                                            s = start - match.getValue().length();
-                                            e = start;
-                                        }
-                                        if(!this.isExact(match.getValue(), fixed, s, e, match.isNegative())) {
-                                            replace = false;
-                                            break;
-                                        }
-                                    }
-                                }
-
-                                if(replace) {
-                                    output += rule.getReplace();
-                                    cur = end - 1;
-                                    matched = true;
-                                    break;
-                                }
-
-                            }
-
-                            if(matched == true) break;
-
-                            // Default
-                            output += pattern.getReplace();
-                            cur = end - 1;
-                            matched = true;
-                            break;
-                        } else if (pattern.getFind().length() > chunk.length() ||
-                                (pattern.getFind().length() == chunk.length() &&
-                                pattern.getFind().compareTo(chunk) < 0)) {
-                            left = mid + 1;
-                        } else {
-                            right = mid - 1;
-                        }
+                if(end <= text.length()) {
+                    String chunk = text.substring(start, end);
+                    Pattern pattern = getMatchedPattern(chunk);
+                    if(pattern == null ) {
                     }
+                    else {
+                         for(Rule rule: pattern.getRules()) {
+                            boolean replace = isReplacable (rule,start,end,text);
+                            if(replace) {
+                                output += rule.getReplace();
+                                cur = end - 1;
+                                matched = true;
+                                break;
+                            }
+                        }
+                        if(matched == true) break;
+
+                        // Default
+                        output += pattern.getReplace();
+                        cur = end - 1;
+                        matched = true;
+                        break;
+                    } 
                     if(matched == true) break;
                 }
             }
-
             if(!matched) {
-                output += fixed.charAt(cur);
+                output += text.charAt(cur);
             }
-            // System.out.printf("cur: %s, start: %s, end: %s, prev: %s\n", cur, start, end, prev);
+             
         }
         return output;
     }
+    
+    private Pattern getMatchedPattern (String chunk) {
+       Pattern pattern = patternMap.get(chunk);
+       return pattern;
+    }
 
+    private boolean isReplacable (Rule rule, int start, int end, String fixed) {
+        boolean replace = true;
+        int chk;
+        for (Match match : rule.getMatches()) {
+            if(match.getType().equals("suffix")) {
+                chk = end;
+            }
+            // Prefix
+            else {
+                chk = start - 1;
+            }
+            // Beginning
+            switch (match.getScope()) {
+                case "punctuation":
+                    if (! (
+                            (chk < 0 && match.getType().equals("prefix")) ||
+                            (chk >= fixed.length() && match.getType().equals("suffix")) ||
+                            this.isPunctuation(fixed.charAt(chk))
+                            ) ^ match.isNegative()) {
+                        replace = false;
+                        break;
+                    }
+                    break;
+                case "vowel":
+                    if (! (
+                            (
+                            (chk >= 0 && match.getType().equals("prefix")) ||
+                            (chk < fixed.length() && match.getType().equals("suffix"))
+                            ) &&
+                            this.isVowel(fixed.charAt(chk))
+                            ) ^ match.isNegative()) {
+                        replace = false;
+                        break;
+                    }
+                    break;
+                case "consonant":
+                    if (! (
+                            (
+                            (chk >= 0 && match.getType().equals("prefix")) ||
+                            (chk < fixed.length() && match.getType().equals("suffix"))
+                            ) &&
+                            this.isConsonant(fixed.charAt(chk))
+                            ) ^ match.isNegative()) {
+                        replace = false;
+                        break;
+                    }
+                    break;
+                case "exact":
+                    int s, e;
+                    if(match.getType().equals("suffix")) {
+                        s = end;
+                        e = end + match.getValue().length();
+                    }
+                    // Prefix
+                    else {
+                        s = start - match.getValue().length();
+                        e = start;
+                    }   if (!this.isExact(match.getValue(), fixed, s, e, match.isNegative())) {
+                        replace = false;
+                        break;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+        return replace;
+    }
+    
     private boolean isVowel(char c) {
         return ((vowel.indexOf(Character.toLowerCase(c)) >= 0));
     }
